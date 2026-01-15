@@ -1,0 +1,97 @@
+import os
+import datetime
+import sqlite3
+from typing import Annotated, Literal, TypedDict
+from dotenv import load_dotenv
+
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver # <--- NEW: Import Memory
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import SystemMessage # <--- NEW: For the persona
+
+from tools.memory import save_memory, search_memory
+from tools.calculator import calculator
+from tools.calendar import list_calendar_events, add_calendar_event
+
+load_dotenv()
+
+def init_llm(provider: str = "openai"):
+    if provider == "openai":
+        return ChatOpenAI(model="gpt-4o", temperature=0)
+    elif provider == "claude":
+        return ChatAnthropic(model="claude-3-5-sonnet-20240620", temperature=0)
+    elif provider == "gemini":
+        return ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0)
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+
+llm = init_llm("openai") 
+
+# --- CONNECT TOOLS ---
+tools_list = [save_memory, search_memory, calculator, list_calendar_events, add_calendar_event]
+llm_with_tools = llm.bind_tools(tools_list)
+
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+def chatbot_node(state: AgentState):
+    # 1. Get the Current Date & Time (Singapore Time)
+    now = datetime.datetime.now()
+    current_time_str = now.strftime("%A, %d %B %Y, %I:%M %p")
+    
+    # 2. Inject Time into the Persona
+    persona = SystemMessage(content=f"""
+    You are Gestella, an elite executive assistant.
+    
+    CURRENT CONTEXT:
+    - Today is: {current_time_str}
+    - User Location: Singapore (GMT+8)
+    
+    RULES:
+    1. If the user provides enough info for a calendar event (What, When), just DO IT. Don't ask "Shall I?".
+    2. If details are missing, ask for them.
+    3. Always speak English/Singlish.
+    4. When user says "tomorrow" or "next week", calculate the date based on 'Today is: {current_time_str}'.
+    """)
+    
+    # Check if persona is already in history to avoid stacking
+    if isinstance(state["messages"][0], SystemMessage):
+        # We REPLACED the old persona with the new one (to update the time)
+        state["messages"][0] = persona
+        messages = state["messages"]
+    else:
+        messages = [persona] + state["messages"]
+
+    return {"messages": [llm_with_tools.invoke(messages)]}
+
+tool_node = ToolNode(tools_list) 
+
+def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
+    last_message = state["messages"][-1]
+    if last_message.tool_calls:
+        return "tools"
+    return "__end__"
+
+workflow = StateGraph(AgentState)
+workflow.add_node("agent", chatbot_node)
+workflow.add_node("tools", tool_node)
+workflow.set_entry_point("agent")
+workflow.add_conditional_edges("agent", should_continue)
+workflow.add_edge("tools", "agent")
+
+# 1. Connect to a local database file
+# check_same_thread=False is needed for Telegram's async nature
+db_path = "gestella_state.db"
+conn = sqlite3.connect(db_path, check_same_thread=False)
+
+# 2. Create the Saver
+memory = SqliteSaver(conn)
+
+# 3. Compile the App with the new Saver
+app = workflow.compile(checkpointer=memory)

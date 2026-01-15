@@ -1,0 +1,13 @@
+python-telegram-bot
+langchain
+langchain-openai
+langchain-google-genai
+langchain-anthropic
+langgraph
+langgraph-checkpoint-sqlite
+supabase
+openai
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+python-dotenv
