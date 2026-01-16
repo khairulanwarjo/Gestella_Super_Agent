@@ -18,6 +18,7 @@ from langchain_core.messages import SystemMessage # <--- NEW: For the persona
 from tools.memory import save_memory, search_memory
 from tools.calculator import calculator
 from tools.calendar import list_calendar_events, add_calendar_event
+from tools.meeting import analyze_meeting  # <--- NEW
 
 load_dotenv()
 
@@ -34,7 +35,7 @@ def init_llm(provider: str = "openai"):
 llm = init_llm("openai") 
 
 # --- CONNECT TOOLS ---
-tools_list = [save_memory, search_memory, calculator, list_calendar_events, add_calendar_event]
+tools_list = [save_memory, search_memory, calculator, list_calendar_events, add_calendar_event, analyze_meeting] # <--- Added here
 llm_with_tools = llm.bind_tools(tools_list)
 
 class AgentState(TypedDict):
@@ -58,6 +59,7 @@ def chatbot_node(state: AgentState):
     2. If details are missing, ask for them.
     3. Always speak English/Singlish.
     4. When user says "tomorrow" or "next week", calculate the date based on 'Today is: {current_time_str}'.
+    5. If the user sends a LONG voice note or asks for a "meeting summary", USE the 'analyze_meeting' tool. Do not try to summarize it yourself.
     """)
     
     # Check if persona is already in history to avoid stacking
