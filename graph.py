@@ -1,6 +1,5 @@
 import os
 import datetime
-import sqlite3
 from typing import Annotated, Literal, TypedDict
 from dotenv import load_dotenv
 
@@ -8,17 +7,25 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver # <--- NEW: Import Memory
-from langgraph.checkpoint.sqlite import SqliteSaver
 
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage # <--- NEW: For the persona
 
-from tools.memory import save_memory, search_memory
-from tools.calculator import calculator
-from tools.calendar import list_calendar_events, add_calendar_event
-from tools.meeting import analyze_meeting  # <--- NEW
+# Import Tools (Ensure your tools folder structure is correct)
+# If using the 'flat' structure on GitHub, remove 'tools.' prefix
+try:
+    from tools.memory import save_memory, search_memory
+    from tools.calculator import calculator
+    from tools.calendar import list_calendar_events, add_calendar_event
+    from tools.meeting import analyze_meeting
+except ImportError:
+    # Fallback for flat structure
+    from memory import save_memory, search_memory
+    from calculator import calculator
+    from calendar import list_calendar_events, add_calendar_event
+    from meeting import analyze_meeting
 
 load_dotenv()
 
@@ -87,13 +94,6 @@ workflow.set_entry_point("agent")
 workflow.add_conditional_edges("agent", should_continue)
 workflow.add_edge("tools", "agent")
 
-# 1. Connect to a local database file
-# check_same_thread=False is needed for Telegram's async nature
-db_path = "gestella_state.db"
-conn = sqlite3.connect(db_path, check_same_thread=False)
-
-# 2. Create the Saver
-memory = SqliteSaver(conn)
-
-# 3. Compile the App with the new Saver
+# --- MEMORY SETUP ---
+memory = MemorySaver() # <--- Using RAM to fix Async Error
 app = workflow.compile(checkpointer=memory)
