@@ -84,45 +84,50 @@ async def transcribe_voice(voice_file_path):
 
 async def run_agent(chat_id, user_text, context):
     """
-    Runs the LangGraph Agent using 'invoke' (Wait & Return).
-    This is safer than streaming for large tasks because it guarantees
-    we get the final state of the conversation history.
+    Runs the LangGraph Agent using 'ainvoke' (Native Async).
+    This fixes the 'Input Echo' bug by correctly handling the Async Meeting Tool.
     """
     config = {"configurable": {"thread_id": str(chat_id)}}
     inputs = {"messages": [HumanMessage(content=user_text)]}
     
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    print(f"🤖 Agent started for chat {chat_id} (INVOKE MODE)...")
+    print(f"🤖 Agent started for chat {chat_id} (ASYNC INVOKE)...")
     
-    # 1. Run the Graph in a separate thread to avoid blocking Telegram's heartbeat
-    # We use to_thread because app.invoke is blocking code.
-    final_state = await asyncio.to_thread(app.invoke, inputs, config)
-    
-    # 2. Extract the Final Response
-    # The 'final_state' contains the entire history. We just want the last message.
-    messages = final_state.get("messages", [])
-    
-    final_response = ""
-    
-    if messages:
-        # Get the very last message from the AI
-        last_msg = messages[-1]
-        final_response = last_msg.content
-        print(f"✅ Final Message Found: {len(final_response)} chars")
+    try:
+        # USE AINVOKE (Native Async) - This is the key fix!
+        final_state = await app.ainvoke(inputs, config)
         
-        # Fallback: If the last message is empty (sometimes happens after tool use),
-        # look backwards for the last valid AI message.
-        if not final_response:
-            print("⚠️ Last message empty, scanning history backwards...")
-            for msg in reversed(messages):
-                if hasattr(msg, "content") and len(msg.content) > 500: # Look for the big report
-                    final_response = msg.content
-                    print(f"✅ Found content in history: {len(final_response)} chars")
-                    break
-    else:
-        print("❌ No messages found in final state.")
+        messages = final_state.get("messages", [])
+        
+        # DEBUG: Print message types to logs so we know what happened
+        for m in messages:
+            print(f" - {type(m).__name__}: {len(m.content)} chars")
 
-    return final_response
+        # 1. Safety Check: Did the agent actually run?
+        # If the last message is still the Human's input, the Agent failed.
+        if not messages or isinstance(messages[-1], HumanMessage):
+            print("❌ Agent did not run! Returning error.")
+            return "Error: The Agent failed to execute the logic. Please try again."
+
+        # 2. Vacuum Logic: Find the Real Content
+        # Default to the last message
+        final_response = messages[-1].content
+        
+        # If the last message is short (e.g., "Done."), look backwards for the HUGE report.
+        if len(final_response) < 500:
+            print("⚠️ Final response is short. Searching history for the long report...")
+            for msg in reversed(messages):
+                # We want a message that is NOT the user input and is LONG
+                if not isinstance(msg, HumanMessage) and len(msg.content) > 500:
+                    final_response = msg.content
+                    print(f"✅ Found the long report in history ({len(final_response)} chars)")
+                    break
+        
+        return final_response
+
+    except Exception as e:
+        print(f"❌ Critical Agent Error: {e}")
+        return f"Error running agent: {e}"
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
