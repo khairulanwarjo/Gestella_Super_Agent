@@ -84,34 +84,44 @@ async def transcribe_voice(voice_file_path):
 
 async def run_agent(chat_id, user_text, context):
     """
-    Runs the LangGraph Agent with 'Sticky Memory' logic.
+    Runs the LangGraph Agent with 'Vacuum' logic.
+    It captures ALL messages and selects the LONGEST one as the final answer.
+    This ensures we don't lose the meeting minutes just because the bot said "Done" afterwards.
     """
     config = {"configurable": {"thread_id": str(chat_id)}}
     inputs = {"messages": [HumanMessage(content=user_text)]}
     
-    final_response = ""
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    # Store every valid text chunk we see
+    captured_messages = []
     
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     print(f"🤖 Agent started for chat {chat_id}...")
 
     # Run the graph
     async for event in app.astream(inputs, config=config):
         for value in event.values():
-            # Get the last message from the current step
-            if "messages" in value and len(value["messages"]) > 0:
-                last_msg = value["messages"][-1]
+            # Check if there are messages in this step
+            if "messages" in value:
+                # Iterate through ALL messages in this step (could be Tool output or AI response)
+                for msg in value["messages"]:
+                    if msg.content and len(msg.content.strip()) > 0:
+                        captured_messages.append(msg.content)
+                        # Print progress so we see it in logs
+                        print(f"📥 Captured chunk: {len(msg.content)} chars")
                 
-                # FIX: "Sticky Memory"
-                # Only update final_response if the new content is NOT empty.
-                # This prevents a blank "final step" from erasing the good work.
-                if last_msg.content and last_msg.content.strip() != "":
-                    final_response = last_msg.content
-                    print(f"🔄 Valid Update: {len(final_response)} chars")
-                
-                # Keep sending "Typing..." action so user knows we are alive
+                # Keep sending "Typing..." action
                 await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    print(f"✅ Final Response Length: {len(final_response)}")
+    # --- THE VACUUM LOGIC ---
+    # Instead of taking the last one, we take the LONGEST one.
+    # Meeting minutes are huge (20k chars). "I'm done" is small (10 chars).
+    if captured_messages:
+        final_response = max(captured_messages, key=len)
+        print(f"✅ Selected Longest Response: {len(final_response)} chars")
+    else:
+        final_response = ""
+        print("❌ No content captured.")
+
     return final_response
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
