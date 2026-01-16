@@ -65,32 +65,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handles Voice Notes.
+    Handles Voice Notes AND Audio Files (MP3s).
     """
     user_id = update.effective_user.id
-    print(f"🎤 Voice note received from {user_id}")
     
-    # 1. Download the voice file
-    voice_file = await context.bot.get_file(update.message.voice.file_id)
-    file_path = "voice_note.ogg"
-    await voice_file.download_to_drive(file_path)
+    # 1. Detect if it's a Voice Note or an Audio File
+    if update.message.voice:
+        file_obj = update.message.voice
+        file_type = "Voice Note"
+    elif update.message.audio:
+        file_obj = update.message.audio
+        file_type = "Audio File"
+    else:
+        return
+
+    print(f"🎤 {file_type} received from {user_id}")
     
-    # 2. Transcribe
-    transcribed_text = await transcribe_voice(file_path)
-    print(f"📝 Transcribed: {transcribed_text}")
-    
-    # ... When calling the app:
-    chat_id = update.effective_chat.id
-    config = {"configurable": {"thread_id": str(chat_id)}} # <--- NEW
-    
-    inputs = {"messages": [HumanMessage(content=transcribed_text)]}
-    
-    final_response = ""
-    for event in app.stream(inputs, config=config): # <--- NEW: Pass config
-        for value in event.values():
-            final_response = value["messages"][-1].content
-            
-    await context.bot.send_message(chat_id=chat_id, text=final_response)
+    # 2. CHECK FILE SIZE (Limit is 20MB = ~20,000,000 bytes)
+    file_size = file_obj.file_size
+    if file_size > 20 * 1024 * 1024:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text=f"⚠️ This file is too large ({file_size/1024/1024:.1f}MB). Telegram bots can only process files under 20MB. Please compress it or split it."
+        )
+        return
+
+    # 3. Download and Process
+    try:
+        status_msg = await context.bot.send_message(chat_id=update.effective_chat.id, text="⏳ Downloading & Transcribing...")
+        
+        voice_file = await context.bot.get_file(file_obj.file_id)
+        file_path = "voice_note.ogg" # Whisper handles most formats fine
+        await voice_file.download_to_drive(file_path)
+        
+        # Transcribe
+        transcribed_text = await transcribe_voice(file_path)
+        print(f"📝 Transcribed: {transcribed_text[:50]}...")
+        
+        # 4. Send to Agent Brain
+        # IMPORTANT: We explicitly tell the brain this is a MEETING if it's long
+        if len(transcribed_text) > 500:
+             input_text = f"Analyze this meeting recording: {transcribed_text}"
+        else:
+             input_text = transcribed_text
+
+        chat_id = update.effective_chat.id
+        config = {"configurable": {"thread_id": str(chat_id)}}
+        
+        inputs = {"messages": [HumanMessage(content=input_text)]}
+        
+        final_response = ""
+        for event in app.stream(inputs, config=config):
+            for value in event.values():
+                final_response = value["messages"][-1].content
+                
+        # Delete the "Downloading" status message
+        await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+        
+        await context.bot.send_message(chat_id=chat_id, text=final_response)
+        
+    except Exception as e:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error: {str(e)}")
     
     # Cleanup
     if os.path.exists(file_path):
@@ -108,7 +143,7 @@ if __name__ == '__main__':
     application.add_handler(text_handler)
     
     # 2. Voice Notes
-    voice_handler = MessageHandler(filters.VOICE, handle_voice)
+    voice_handler = MessageHandler(filters.VOICE | filters.AUDIO, handle_voice)
     application.add_handler(voice_handler)
     
     # Run
