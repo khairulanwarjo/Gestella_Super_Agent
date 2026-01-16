@@ -48,8 +48,8 @@ llm_with_tools = llm.bind_tools(tools_list)
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
-def chatbot_node(state: AgentState):
-    # 1. Get the Current Date & Time (Singapore Time)
+async def chatbot_node(state: AgentState):
+    # 1. Get the Current Date & Time
     now = datetime.datetime.now()
     current_time_str = now.strftime("%A, %d %B %Y, %I:%M %p")
     
@@ -71,13 +71,15 @@ def chatbot_node(state: AgentState):
     
     # Check if persona is already in history to avoid stacking
     if isinstance(state["messages"][0], SystemMessage):
-        # We REPLACED the old persona with the new one (to update the time)
         state["messages"][0] = persona
         messages = state["messages"]
     else:
         messages = [persona] + state["messages"]
 
-    return {"messages": [llm_with_tools.invoke(messages)]}
+    # 3. CRITICAL FIX: Use 'await' and 'ainvoke' (Async Invoke)
+    response = await llm_with_tools.ainvoke(messages)
+    
+    return {"messages": [response]}
 
 tool_node = ToolNode(tools_list) 
 
