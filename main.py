@@ -23,20 +23,42 @@ logging.basicConfig(
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 async def send_smart_response(context, chat_id, text):
+    """
+    SMART DISPATCHER:
+    1. If it looks like Meeting Minutes (contains '# '), ALWAYS send as a file.
+    2. If text is huge (> 2000 chars), send as a file.
+    3. Otherwise, send as chat message.
+    """
     if not text:
         await context.bot.send_message(chat_id=chat_id, text="⚠️ Error: Empty response from Agent.")
         return
 
-    if len(text) > 3000:
+    # LOGIC UPDATE: Force file if it has Markdown Headers OR is long
+    is_meeting_notes = "# Executive Summary" in text or "###" in text
+    is_long = len(text) > 2000
+
+    if is_meeting_notes or is_long:
+        # Generate a filename with timestamp
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         filename = f"Meeting_Minutes_{timestamp}.md"
+        
+        # Write to file
         with open(filename, "w", encoding="utf-8") as f:
             f.write(text)
-        await context.bot.send_message(chat_id=chat_id, text="📝 The report is long, so I've packaged it into a file for you:")
+            
+        # Send the file
+        await context.bot.send_message(chat_id=chat_id, text="📝 Here is your structured report:")
         with open(filename, "rb") as f:
-            await context.bot.send_document(chat_id=chat_id, document=f, caption="Here are your structured meeting notes.")
+            await context.bot.send_document(
+                chat_id=chat_id, 
+                document=f, 
+                caption="Meeting_Minutes.md"
+            )
+        
+        # Cleanup
         os.remove(filename)
     else:
+        # Send as normal text
         if len(text) > 4096:
             for x in range(0, len(text), 4096):
                 await context.bot.send_message(chat_id=chat_id, text=text[x:x+4096])
