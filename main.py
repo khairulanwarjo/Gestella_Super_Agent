@@ -4,17 +4,24 @@ import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
+# Telegram Libraries
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+
+# OpenAI
 from openai import OpenAI
+
+# LangGraph Brain
 from graph import app
 from langchain_core.messages import HumanMessage
 
+# Load keys
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Setup Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -30,7 +37,7 @@ async def send_smart_response(context, chat_id, text):
     3. Otherwise, send as chat message.
     """
     if not text:
-        await context.bot.send_message(chat_id=chat_id, text="⚠️ Error: Empty response from Agent.")
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Error: I processed the audio, but the final text response was empty. Please try again.")
         return
 
     # LOGIC UPDATE: Force file if it has Markdown Headers OR is long
@@ -76,28 +83,34 @@ async def transcribe_voice(voice_file_path):
     return transcription.text
 
 async def run_agent(chat_id, user_text, context):
+    """
+    Runs the LangGraph Agent with 'Sticky Memory' logic.
+    """
     config = {"configurable": {"thread_id": str(chat_id)}}
     inputs = {"messages": [HumanMessage(content=user_text)]}
     
     final_response = ""
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     
-    # DEBUG: Print start
     print(f"🤖 Agent started for chat {chat_id}...")
 
+    # Run the graph
     async for event in app.astream(inputs, config=config):
         for value in event.values():
-            # Get the last message
-            last_msg = value["messages"][-1]
-            
-            # DEBUG: Print what the agent is doing
-            print(f"🔄 Graph Step: {last_msg.content[:50]}...") 
-            
-            if last_msg.content:
-                final_response = last_msg.content
+            # Get the last message from the current step
+            if "messages" in value and len(value["messages"]) > 0:
+                last_msg = value["messages"][-1]
+                
+                # FIX: "Sticky Memory"
+                # Only update final_response if the new content is NOT empty.
+                # This prevents a blank "final step" from erasing the good work.
+                if last_msg.content and last_msg.content.strip() != "":
+                    final_response = last_msg.content
+                    print(f"🔄 Valid Update: {len(final_response)} chars")
+                
+                # Keep sending "Typing..." action so user knows we are alive
                 await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # DEBUG: Print final result
     print(f"✅ Final Response Length: {len(final_response)}")
     return final_response
 
@@ -125,18 +138,20 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
 
+    # Check Size Limit (20MB)
     if file_obj.file_size > 20 * 1024 * 1024:
-        await context.bot.send_message(chat_id=chat_id, text="⚠️ File too large (>20MB).")
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ File too large (>20MB). Telegram limits bots to 20MB downloads. Please compress it.")
         return
 
     try:
         status_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Downloading & Transcribing...")
+        
         file_ref = await context.bot.get_file(file_obj.file_id)
         file_path = "temp_audio.ogg"
         await file_ref.download_to_drive(file_path)
         
         transcript = await transcribe_voice(file_path)
-        print(f"📝 Transcript Length: {len(transcript)} chars")
+        print(f"📝 Transcript length: {len(transcript)} chars")
         
         if len(transcript) > 500:
             await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text="🧠 Analyzing meeting content... (This can take 1-2 mins)")
@@ -146,6 +161,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             input_text = transcript
 
         response_text = await run_agent(chat_id, input_text, context)
+        
         await send_smart_response(context, chat_id, response_text)
         
     except Exception as e:
@@ -157,6 +173,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     print("🚀 Gestella is waking up...")
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    
     application.run_polling()
