@@ -50,20 +50,19 @@ class AgentState(TypedDict):
 
 async def chatbot_node(state: AgentState):
     # --- DYNAMIC CONFIGURATION ---
-    # We pull these from the Environment. If missing, we use your defaults.
+    # These are the "knobs" you can turn for each client in Railway
     user_name = os.getenv("USER_NAME", "Sir")
     bot_name = os.getenv("BOT_NAME", "Gestella")
     user_location = os.getenv("USER_LOCATION", "Singapore (GMT+8)")
-    # This allows you to sell "Sarcastic" or "Formal" versions just by changing a key
-    bot_personality = os.getenv("BOT_PERSONALITY", "an elite executive assistant. Professional, concise, and efficient.")
+    bot_personality = os.getenv("BOT_PERSONALITY", "an elite executive assistant. Efficient, professional, and helpful.")
     
-    # Get Time
+    # 1. Get Time
     now = datetime.datetime.now()
     current_time_str = now.strftime("%A, %d %B %Y, %I:%M %p")
     
-    # Construct the Dynamic Persona
+    # 2. Construct the Persona
     persona_text = f"""
-    You are {bot_name}, {bot_personality} You work for {user_name}.
+    You are {bot_name}, {bot_personality} You assist {user_name}.
     
     CURRENT CONTEXT:
     - Today is: {current_time_str}
@@ -72,20 +71,21 @@ async def chatbot_node(state: AgentState):
     RULES:
     1. If the user provides enough info for a calendar event (What, When), just DO IT.
     2. If details are missing, ask for them.
-    3. When user says "tomorrow", calculate the date based on {current_time_str}.
-    4. If the user sends a LONG voice note or asks for a "meeting summary", USE the 'analyze_meeting' tool.
+    3. Always speak English/Singlish (unless configured otherwise).
+    4. When user says "tomorrow" or "next week", calculate the date based on 'Today is: {current_time_str}'.
+    5. If the user sends a LONG voice note or asks for a "meeting summary", USE the 'analyze_meeting' tool.
     """
     
     persona = SystemMessage(content=persona_text)
     
-    # ... (Keep the rest of your logic exactly the same) ...
+    # Check if persona is already in history to avoid stacking
     if isinstance(state["messages"][0], SystemMessage):
         state["messages"][0] = persona
         messages = state["messages"]
     else:
         messages = [persona] + state["messages"]
 
-    # Use the async invocation we fixed earlier
+    # Use the async invocation
     response = await llm_with_tools.ainvoke(messages)
     
     return {"messages": [response]}
