@@ -1,0 +1,21 @@
+# Security: Never upload these
+.env
+token.json
+credentials.json
+client_secret_*.json
+
+# Python junk
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Database & Logs
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Generated Files
+Meeting_Minutes_*.md
+temp_audio.ogg
