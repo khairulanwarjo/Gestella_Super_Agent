@@ -14,37 +14,37 @@
       "required": true
     },
     "OPENAI_API_KEY": {
-      "description": "Your OpenAI API Key (starts with sk-)",
+      "description": "Your OpenAI API Key",
       "required": true
     },
     "SUPABASE_URL": {
-      "description": "The URL of your Supabase project",
+      "description": "Your Supabase Project URL",
       "required": true
     },
     "SUPABASE_KEY": {
-      "description": "The Service Role (or Anon) Key for Supabase",
+      "description": "Your Supabase Service Key",
       "required": true
     },
     "GOOGLE_TOKEN_JSON": {
-      "description": "Paste the content of your local token.json here",
+      "description": "Paste the content of token.json here",
       "required": true
     },
     "GOOGLE_CREDENTIALS_JSON": {
-      "description": "Paste the content of your local credentials.json here",
+      "description": "Paste the content of credentials.json here",
       "required": true
     },
     "BOT_NAME": {
-      "description": "What should the bot call itself?",
+      "description": "Bot Name",
       "defaultValue": "Gestella",
       "required": false
     },
     "USER_LOCATION": {
-      "description": "Where is the user located? (e.g. London, Singapore)",
+      "description": "User Location",
       "defaultValue": "Singapore (GMT+8)",
       "required": false
     },
     "USER_NAME": {
-      "description": "How should the bot address the user?",
+      "description": "User Name",
       "defaultValue": "Sir",
       "required": false
     }
