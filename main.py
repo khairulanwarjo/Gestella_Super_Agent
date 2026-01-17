@@ -161,6 +161,9 @@ async def transcribe_voice(voice_file_path):
 
 async def run_agent(chat_id, user_text, context):
     config = {"configurable": {"thread_id": str(chat_id)}}
+    # --- CHANGE THIS LINE ---
+    # We inject the ID so the Agent sees: "User ID: 12345. save my credit card info."
+    secure_input = f"User ID: {chat_id}\n\n{user_text}"
     inputs = {"messages": [HumanMessage(content=user_text)]}
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     
