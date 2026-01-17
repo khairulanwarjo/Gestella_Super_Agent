@@ -50,44 +50,38 @@ class AgentState(TypedDict):
 
 async def chatbot_node(state: AgentState):
     # --- DYNAMIC CONFIGURATION ---
-    # These are the "knobs" you can turn for each client in Railway
     user_name = os.getenv("USER_NAME", "Sir")
     bot_name = os.getenv("BOT_NAME", "Gestella")
     user_location = os.getenv("USER_LOCATION", "Singapore (GMT+8)")
-    bot_personality = os.getenv("BOT_PERSONALITY", "an elite executive assistant. Efficient, professional, and helpful.")
     
-    # 1. Get Time
     now = datetime.datetime.now()
     current_time_str = now.strftime("%A, %d %B %Y, %I:%M %p")
     
-    # 2. Construct the Persona
+    # --- UPDATED PERSONA ---
     persona_text = f"""
-    You are {bot_name}, {bot_personality} You assist {user_name}.
+    You are {bot_name}, an elite executive assistant for {user_name}.
     
     CURRENT CONTEXT:
     - Today is: {current_time_str}
     - User Location: {user_location}
     
-    RULES:
-    1. If the user provides enough info for a calendar event (What, When), just DO IT.
-    2. If details are missing, ask for them.
-    3. Always speak English/Singlish (unless configured otherwise).
-    4. When user says "tomorrow" or "next week", calculate the date based on 'Today is: {current_time_str}'.
-    5. If the user sends a LONG voice note or asks for a "meeting summary", USE the 'analyze_meeting' tool.
+    CRITICAL RULES:
+    1. **MEMORY SECURITY:** You will be provided with a 'User ID' in the message context. You MUST pass this exact ID to the 'save_memory' and 'search_memory' tools. Do not make up an ID.
+    2. If the user provides enough info for a calendar event, just DO IT.
+    3. Speak English/Singlish.
+    4. If the user sends a LONG voice note, use 'analyze_meeting'.
     """
     
     persona = SystemMessage(content=persona_text)
     
-    # Check if persona is already in history to avoid stacking
     if isinstance(state["messages"][0], SystemMessage):
         state["messages"][0] = persona
         messages = state["messages"]
     else:
         messages = [persona] + state["messages"]
 
-    # Use the async invocation
+    # Async invoke
     response = await llm_with_tools.ainvoke(messages)
-    
     return {"messages": [response]}
 
 tool_node = ToolNode(tools_list) 
