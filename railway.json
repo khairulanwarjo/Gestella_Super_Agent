@@ -1,0 +1,52 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python main.py",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  },
+  "variables": {
+    "TELEGRAM_TOKEN": {
+      "description": "The API Token from @BotFather",
+      "required": true
+    },
+    "OPENAI_API_KEY": {
+      "description": "Your OpenAI API Key (starts with sk-)",
+      "required": true
+    },
+    "SUPABASE_URL": {
+      "description": "The URL of your Supabase project",
+      "required": true
+    },
+    "SUPABASE_KEY": {
+      "description": "The Service Role (or Anon) Key for Supabase",
+      "required": true
+    },
+    "GOOGLE_TOKEN_JSON": {
+      "description": "Paste the content of your local token.json here",
+      "required": true
+    },
+    "GOOGLE_CREDENTIALS_JSON": {
+      "description": "Paste the content of your local credentials.json here",
+      "required": true
+    },
+    "BOT_NAME": {
+      "description": "What should the bot call itself?",
+      "defaultValue": "Gestella",
+      "required": false
+    },
+    "USER_LOCATION": {
+      "description": "Where is the user located? (e.g. London, Singapore)",
+      "defaultValue": "Singapore (GMT+8)",
+      "required": false
+    },
+    "USER_NAME": {
+      "description": "How should the bot address the user?",
+      "defaultValue": "Sir",
+      "required": false
+    }
+  }
+}
