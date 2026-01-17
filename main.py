@@ -49,28 +49,25 @@ async def check_access_and_auth(update, context):
     user_id = str(update.effective_user.id)
     
     # A. GATEKEEPER: Check Subscription
-    # If they are NOT active in Supabase, block them.
     if not check_user_subscription(user_id):
         await context.bot.send_message(
             chat_id=update.effective_chat.id, 
-            text="⛔ **Access Denied**\n\nIt seems you don't have an active subscription.\nPlease visit **gestella.ai** to upgrade your plan."
+            text="⛔ **Access Denied**\n\nIt seems you don't have an active subscription."
         )
         return False
 
     # B. AUTH CHECK: Do we have their Token in Supabase?
     user_token = get_user_google_token(user_id)
     
-    # If we have a token, write it to a local file so the Calendar Tool can find it
-    # Note: For strict multi-user, we usually pass token in context, 
-    # but for this step, we will save it as 'token_{user_id}.json'
     if user_token:
-        # We perform a trick here: The Calendar Tool usually looks for 'token.json'.
-        # We will need to update the Calendar Tool later to look for 'token_{user_id}.json'.
-        # For now, let's assume valid auth if DB has it.
+        # ✅ FIX 1: Restore the file from the Database!
+        # This ensures the Calendar Tool always finds the credentials it needs.
+        print(f"🔄 Restoring Google Token file for user {user_id}...")
+        with open("token.json", "w") as f:
+            json.dump(user_token, f)
         return True
 
     # C. LOGIN FLOW: If no token, ask for it.
-    # Check if they just sent the code
     if user_id in AUTH_STATE and AUTH_STATE[user_id] == "WAITING":
         code = update.message.text.strip()
         
@@ -82,24 +79,29 @@ async def check_access_and_auth(update, context):
         try:
             status_msg = await context.bot.send_message(chat_id=update.effective_chat.id, text="🔄 Verifying...")
             
-            # Use Master Credentials to verify their code
             flow = InstalledAppFlow.from_client_secrets_file(
                 'credentials.json',
                 scopes=['https://www.googleapis.com/auth/calendar']
             )
             flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
             
-            # Get the token
             flow.fetch_token(code=code)
             
-            # Save to Supabase (Persistent Cloud Storage)
+            # Save to Supabase (Cloud)
             token_json = json.loads(flow.credentials.to_json())
             save_user_google_token(user_id, token_json)
+            
+            # Save to Local File (For immediate use)
+            with open("token.json", "w") as f:
+                json.dump(token_json, f)
             
             del AUTH_STATE[user_id]
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=status_msg.message_id)
             await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ **Connected!** I am now synced with your Calendar.")
-            return False
+            
+            # ✅ FIX 2: Stop processing here!
+            # Prevents the bot from trying to "chat" with your password code.
+            return False 
             
         except Exception as e:
              await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Login failed. Please try the link again.\nError: {e}")
