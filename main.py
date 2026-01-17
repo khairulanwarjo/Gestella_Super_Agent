@@ -99,7 +99,7 @@ async def check_access_and_auth(update, context):
             del AUTH_STATE[user_id]
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=status_msg.message_id)
             await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ **Connected!** I am now synced with your Calendar.")
-            return True
+            return False
             
         except Exception as e:
              await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Login failed. Please try the link again.\nError: {e}")
