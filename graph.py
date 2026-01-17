@@ -49,34 +49,43 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
 async def chatbot_node(state: AgentState):
-    # 1. Get the Current Date & Time
+    # --- DYNAMIC CONFIGURATION ---
+    # We pull these from the Environment. If missing, we use your defaults.
+    user_name = os.getenv("USER_NAME", "Sir")
+    bot_name = os.getenv("BOT_NAME", "Gestella")
+    user_location = os.getenv("USER_LOCATION", "Singapore (GMT+8)")
+    # This allows you to sell "Sarcastic" or "Formal" versions just by changing a key
+    bot_personality = os.getenv("BOT_PERSONALITY", "an elite executive assistant. Professional, concise, and efficient.")
+    
+    # Get Time
     now = datetime.datetime.now()
     current_time_str = now.strftime("%A, %d %B %Y, %I:%M %p")
     
-    # 2. Inject Time into the Persona
-    persona = SystemMessage(content=f"""
-    You are Gestella, an elite executive assistant.
+    # Construct the Dynamic Persona
+    persona_text = f"""
+    You are {bot_name}, {bot_personality} You work for {user_name}.
     
     CURRENT CONTEXT:
     - Today is: {current_time_str}
-    - User Location: Singapore (GMT+8)
+    - User Location: {user_location}
     
     RULES:
-    1. If the user provides enough info for a calendar event (What, When), just DO IT. Don't ask "Shall I?".
+    1. If the user provides enough info for a calendar event (What, When), just DO IT.
     2. If details are missing, ask for them.
-    3. Always speak English/Singlish.
-    4. When user says "tomorrow" or "next week", calculate the date based on 'Today is: {current_time_str}'.
-    5. If the user sends a LONG voice note or asks for a "meeting summary", USE the 'analyze_meeting' tool. Do not try to summarize it yourself.
-    """)
+    3. When user says "tomorrow", calculate the date based on {current_time_str}.
+    4. If the user sends a LONG voice note or asks for a "meeting summary", USE the 'analyze_meeting' tool.
+    """
     
-    # Check if persona is already in history to avoid stacking
+    persona = SystemMessage(content=persona_text)
+    
+    # ... (Keep the rest of your logic exactly the same) ...
     if isinstance(state["messages"][0], SystemMessage):
         state["messages"][0] = persona
         messages = state["messages"]
     else:
         messages = [persona] + state["messages"]
 
-    # 3. CRITICAL FIX: Use 'await' and 'ainvoke' (Async Invoke)
+    # Use the async invocation we fixed earlier
     response = await llm_with_tools.ainvoke(messages)
     
     return {"messages": [response]}

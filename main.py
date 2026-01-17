@@ -29,6 +29,27 @@ logging.basicConfig(
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+def setup_google_credentials():
+    """
+    Auto-creates credential files from Environment Variables.
+    This allows 'One-Click' deployment on Railway without uploading files.
+    """
+    # 1. Handle token.json (The Login Session)
+    # The user will paste the CONTENT of their token.json into a Railway Variable named GOOGLE_TOKEN_JSON
+    token_data = os.getenv("GOOGLE_TOKEN_JSON")
+    if token_data:
+        print("🔑 Found Google Token in Environment. Creating token.json...")
+        with open("token.json", "w") as f:
+            f.write(token_data)
+            
+    # 2. Handle credentials.json (The App ID)
+    # The user will paste the CONTENT of credentials.json into a Railway Variable named GOOGLE_CREDENTIALS_JSON
+    cred_data = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if cred_data:
+        print("🔑 Found Google App Credentials. Creating credentials.json...")
+        with open("credentials.json", "w") as f:
+            f.write(cred_data)
+
 async def send_smart_response(context, chat_id, text):
     """
     SMART DISPATCHER:
@@ -186,7 +207,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(file_path)
 
 if __name__ == '__main__':
-    print("🚀 Gestella is waking up...")
+    setup_google_credentials()
+    
+    bot_name = os.getenv("BOT_NAME", "Gestella")
+    print(f"🚀 {bot_name} is waking up...")
+
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
