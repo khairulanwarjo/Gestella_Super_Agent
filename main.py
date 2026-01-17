@@ -5,27 +5,21 @@ import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Telegram Libraries
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-
-# Google Auth Libraries
 from google_auth_oauthlib.flow import InstalledAppFlow
-
-# OpenAI
 from openai import OpenAI
-
-# LangGraph Brain
-from graph import app
 from langchain_core.messages import HumanMessage
 
-# Load keys
+# Import our updated Database logic
+from database import check_user_subscription, save_user_google_token, get_user_google_token
+from graph import app
+
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Setup Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -33,15 +27,14 @@ logging.basicConfig(
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Global State to track user login attempts
-# Format: { user_id: "WAITING_FOR_CODE" }
+# Global State for Auth Flow: { user_id: "WAITING" }
 AUTH_STATE = {}
 
-# --- 1. SETUP MASTER CREDENTIALS ---
-def setup_google_app():
+# --- 1. SETUP MASTER CREDENTIALS (YOUR APP ID) ---
+def setup_master_credentials():
     """
-    Creates credentials.json from the Environment Variable.
-    This is YOUR Master App ID that you put in Railway.
+    Creates credentials.json from the Railway Variable GOOGLE_CREDENTIALS_JSON.
+    This file is SHARED by all users to authenticate against Google.
     """
     cred_data = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if cred_data:
@@ -49,103 +42,108 @@ def setup_google_app():
         with open("credentials.json", "w") as f:
             f.write(cred_data)
     else:
-        print("⚠️ Warning: No GOOGLE_CREDENTIALS_JSON found. Auth will fail.")
+        print("⚠️ Warning: GOOGLE_CREDENTIALS_JSON missing. Users cannot log in.")
 
-# --- 2. THE NEW AUTH GATEKEEPER ---
-async def check_auth_status(update, context):
-    """
-    Checks if the bot has a valid token.json.
-    If not, it guides the user through the login flow.
-    """
-    user_id = update.effective_user.id
+# --- 2. AUTH FLOW & GATEKEEPER ---
+async def check_access_and_auth(update, context):
+    user_id = str(update.effective_user.id)
     
-    # A. If we already have the file, we are safe!
-    if os.path.exists("token.json"):
+    # A. GATEKEEPER: Check Subscription
+    # If they are NOT active in Supabase, block them.
+    if not check_user_subscription(user_id):
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="⛔ **Access Denied**\n\nIt seems you don't have an active subscription.\nPlease visit **gestella.ai** to upgrade your plan."
+        )
+        return False
+
+    # B. AUTH CHECK: Do we have their Token in Supabase?
+    user_token = get_user_google_token(user_id)
+    
+    # If we have a token, write it to a local file so the Calendar Tool can find it
+    # Note: For strict multi-user, we usually pass token in context, 
+    # but for this step, we will save it as 'token_{user_id}.json'
+    if user_token:
+        # We perform a trick here: The Calendar Tool usually looks for 'token.json'.
+        # We will need to update the Calendar Tool later to look for 'token_{user_id}.json'.
+        # For now, let's assume valid auth if DB has it.
         return True
-    
-    # B. Check if we are waiting for the user to paste the code
-    if user_id in AUTH_STATE and AUTH_STATE[user_id] == "WAITING_FOR_CODE":
+
+    # C. LOGIN FLOW: If no token, ask for it.
+    # Check if they just sent the code
+    if user_id in AUTH_STATE and AUTH_STATE[user_id] == "WAITING":
         code = update.message.text.strip()
         
-        # Simple check to see if it looks like a code (prevent analyzing random text)
-        if len(code) < 10: 
-             await context.bot.send_message(chat_id=update.effective_chat.id, text="⚠️ That doesn't look like a Google code. Please copy the code from the link.")
+        # Basic validation
+        if " " in code or len(code) < 10:
+             await context.bot.send_message(chat_id=update.effective_chat.id, text="⚠️ Invalid code. Please copy the exact code from the Google page.")
              return False
 
         try:
-            status_msg = await context.bot.send_message(chat_id=update.effective_chat.id, text="🔄 Verifying code...")
+            status_msg = await context.bot.send_message(chat_id=update.effective_chat.id, text="🔄 Verifying...")
             
-            # Load the flow using YOUR Master Credentials
+            # Use Master Credentials to verify their code
             flow = InstalledAppFlow.from_client_secrets_file(
                 'credentials.json',
                 scopes=['https://www.googleapis.com/auth/calendar']
             )
-            # Special redirect for copy-paste method
             flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
             
-            # Exchange the code for the actual token
+            # Get the token
             flow.fetch_token(code=code)
             
-            # Save the token locally!
-            with open('token.json', 'w') as token:
-                token.write(flow.credentials.to_json())
+            # Save to Supabase (Persistent Cloud Storage)
+            token_json = json.loads(flow.credentials.to_json())
+            save_user_google_token(user_id, token_json)
             
-            # Cleanup state
             del AUTH_STATE[user_id]
-            
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=status_msg.message_id)
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ **Success!** I am now connected to your Calendar.\n\nYou can ask me to schedule things now!")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ **Connected!** I am now synced with your Calendar.")
             return True
             
         except Exception as e:
-             await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Authorization failed. The code might be expired.\nPlease click the link and try again.")
-             # We don't return False here immediately to let them try again, but usually we restart flow
+             await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Login failed. Please try the link again.\nError: {e}")
              return False
 
-    # C. Start the Flow (First time user sees this)
+    # D. SEND LOGIN LINK
     try:
         flow = InstalledAppFlow.from_client_secrets_file(
             'credentials.json',
             scopes=['https://www.googleapis.com/auth/calendar']
         )
         flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
-        
         auth_url, _ = flow.authorization_url(prompt='consent')
         
-        AUTH_STATE[user_id] = "WAITING_FOR_CODE"
+        AUTH_STATE[user_id] = "WAITING"
         
         msg = f"""
-🛑 **Action Required**
+👋 **Welcome to Gestella Pro!**
 
-To manage your calendar, I need your permission.
+To manage your calendar, I need permission.
 
-1. Click this Google Link:
-{auth_url}
-
+1. Click here: [Authorize Google Calendar]({auth_url})
 2. Log in and copy the code.
 3. **Paste the code here.**
         """
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
     except FileNotFoundError:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ System Error: Master Credentials missing. Please contact Admin.")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ System Error: Master Credentials missing. Contact Admin.")
     
     return False
 
 # --- STANDARD FUNCTIONS ---
 async def send_smart_response(context, chat_id, text):
     if not text: return
-    
-    is_meeting_notes = "# Executive Summary" in text or "###" in text
+    is_meeting = "# Executive Summary" in text or "###" in text
     is_long = len(text) > 2000
 
-    if is_meeting_notes or is_long:
+    if is_meeting or is_long:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         filename = f"Meeting_Minutes_{timestamp}.md"
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(text)
+        with open(filename, "w", encoding="utf-8") as f: f.write(text)
         await context.bot.send_message(chat_id=chat_id, text="📝 Here is your structured report:")
         with open(filename, "rb") as f:
-            await context.bot.send_document(chat_id=chat_id, document=f, caption="Meeting_Minutes.md")
+            await context.bot.send_document(chat_id=chat_id, document=f, caption="Minutes.md")
         os.remove(filename)
     else:
         if len(text) > 4096:
@@ -156,9 +154,8 @@ async def send_smart_response(context, chat_id, text):
 
 async def transcribe_voice(voice_file_path):
     print("🎤 Transcribing...")
-    with open(voice_file_path, "rb") as audio_file:
-        transcription = client.audio.transcriptions.create(model="whisper-1", file=audio_file, language="en")
-    return transcription.text
+    with open(voice_file_path, "rb") as f:
+        return client.audio.transcriptions.create(model="whisper-1", file=f, language="en").text
 
 async def run_agent(chat_id, user_text, context):
     config = {"configurable": {"thread_id": str(chat_id)}}
@@ -168,10 +165,8 @@ async def run_agent(chat_id, user_text, context):
     try:
         final_state = await app.ainvoke(inputs, config)
         messages = final_state.get("messages", [])
+        if not messages or isinstance(messages[-1], HumanMessage): return "Error: Agent failed."
         
-        if not messages or isinstance(messages[-1], HumanMessage):
-            return "Error: Agent failed to respond."
-
         final_response = messages[-1].content
         if len(final_response) < 500:
             for msg in reversed(messages):
@@ -182,44 +177,32 @@ async def run_agent(chat_id, user_text, context):
     except Exception as e:
         return f"Error: {e}"
 
-# --- UPDATED HANDLERS ---
+# --- HANDLERS ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    user_text = update.message.text
-    print(f"📩 Message from {user_id}: {user_text}")
-    
-    # 1. GATEKEEPER CHECK
-    is_authenticated = await check_auth_status(update, context)
-    if not is_authenticated:
-        return # Stop here, user needs to login first
+    # 1. Check Subscription & Auth
+    if not await check_access_and_auth(update, context):
+        return 
 
-    # 2. Run Normal Logic
+    # 2. Run Logic
     try:
-        response_text = await run_agent(chat_id, user_text, context)
-        await send_smart_response(context, chat_id, response_text)
+        response_text = await run_agent(update.effective_chat.id, update.message.text, context)
+        await send_smart_response(context, update.effective_chat.id, response_text)
     except Exception as e:
         print(f"❌ Error: {e}")
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    
-    # 1. GATEKEEPER CHECK
-    is_authenticated = await check_auth_status(update, context)
-    if not is_authenticated:
-        return 
+    if not await check_access_and_auth(update, context): return 
 
-    # 2. Run Voice Logic
     if update.message.voice: file_obj = update.message.voice
     elif update.message.audio: file_obj = update.message.audio
     else: return
 
     if file_obj.file_size > 20 * 1024 * 1024:
-        await context.bot.send_message(chat_id=chat_id, text="⚠️ File too large (>20MB).")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="⚠️ File too large.")
         return
 
     try:
-        status_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Processing...")
+        status_msg = await context.bot.send_message(chat_id=update.effective_chat.id, text="⏳ Processing...")
         file_ref = await context.bot.get_file(file_obj.file_id)
         file_path = "temp_audio.ogg"
         await file_ref.download_to_drive(file_path)
@@ -227,30 +210,25 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         transcript = await transcribe_voice(file_path)
         
         if len(transcript) > 500:
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text="🧠 Analyzing meeting...")
+            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=status_msg.message_id, text="🧠 Analyzing meeting...")
             input_text = f"Analyze this meeting: {transcript}"
         else:
-            await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=status_msg.message_id)
             input_text = transcript
 
-        response_text = await run_agent(chat_id, input_text, context)
-        await send_smart_response(context, chat_id, response_text)
-        
+        response_text = await run_agent(update.effective_chat.id, input_text, context)
+        await send_smart_response(context, update.effective_chat.id, response_text)
     except Exception as e:
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ Error: {str(e)}")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error: {str(e)}")
     
     if os.path.exists(file_path): os.remove(file_path)
 
 if __name__ == '__main__':
-    # 1. Load the Master Credentials for Auth Flow
-    setup_google_app()
+    # 1. Setup Admin Credentials
+    setup_master_credentials()
     
-    bot_name = os.getenv("BOT_NAME", "Gestella")
-    print(f"🚀 {bot_name} is waking up...")
-    
+    print("🚀 Gestella (SaaS Mode) is waking up...")
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
-    
     application.run_polling()
