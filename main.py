@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import asyncio
 from datetime import datetime
@@ -29,24 +30,30 @@ logging.basicConfig(
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# --- NEW: AUTO-LOGIN FUNCTION ---
 def setup_google_credentials():
     """
-    Auto-creates credential files from Environment Variables.
-    This allows 'One-Click' deployment on Railway without uploading files.
+    Checks for Google Credentials in Environment Variables and creates the files.
+    This allows 'One-Click' deployment without manually uploading sensitive files.
     """
-    # 1. Handle token.json (The Login Session)
-    # The user will paste the CONTENT of their token.json into a Railway Variable named GOOGLE_TOKEN_JSON
+    print("🔐 Checking for Google Credentials in Environment...")
+    
+    # 1. The Token (Login Session)
+    # In Railway, you will create a variable: GOOGLE_TOKEN_JSON
+    # and paste the entire content of token.json into it.
     token_data = os.getenv("GOOGLE_TOKEN_JSON")
     if token_data:
-        print("🔑 Found Google Token in Environment. Creating token.json...")
+        print("   ✅ Found GOOGLE_TOKEN_JSON. Creating token.json...")
         with open("token.json", "w") as f:
             f.write(token_data)
-            
-    # 2. Handle credentials.json (The App ID)
-    # The user will paste the CONTENT of credentials.json into a Railway Variable named GOOGLE_CREDENTIALS_JSON
+    else:
+        print("   ⚠️ No GOOGLE_TOKEN_JSON found. (If running locally, ensure token.json exists).")
+
+    # 2. The Credentials (App ID)
+    # In Railway, you will create a variable: GOOGLE_CREDENTIALS_JSON
     cred_data = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if cred_data:
-        print("🔑 Found Google App Credentials. Creating credentials.json...")
+        print("   ✅ Found GOOGLE_CREDENTIALS_JSON. Creating credentials.json...")
         with open("credentials.json", "w") as f:
             f.write(cred_data)
 
@@ -66,15 +73,12 @@ async def send_smart_response(context, chat_id, text):
     is_long = len(text) > 2000
 
     if is_meeting_notes or is_long:
-        # Generate a filename with timestamp
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         filename = f"Meeting_Minutes_{timestamp}.md"
         
-        # Write to file
         with open(filename, "w", encoding="utf-8") as f:
             f.write(text)
             
-        # Send the file
         await context.bot.send_message(chat_id=chat_id, text="📝 Here is your structured report:")
         with open(filename, "rb") as f:
             await context.bot.send_document(
@@ -82,11 +86,8 @@ async def send_smart_response(context, chat_id, text):
                 document=f, 
                 caption="Meeting_Minutes.md"
             )
-        
-        # Cleanup
         os.remove(filename)
     else:
-        # Send as normal text
         if len(text) > 4096:
             for x in range(0, len(text), 4096):
                 await context.bot.send_message(chat_id=chat_id, text=text[x:x+4096])
@@ -106,7 +107,6 @@ async def transcribe_voice(voice_file_path):
 async def run_agent(chat_id, user_text, context):
     """
     Runs the LangGraph Agent using 'ainvoke' (Native Async).
-    This fixes the 'Input Echo' bug by correctly handling the Async Meeting Tool.
     """
     config = {"configurable": {"thread_id": str(chat_id)}}
     inputs = {"messages": [HumanMessage(content=user_text)]}
@@ -115,30 +115,23 @@ async def run_agent(chat_id, user_text, context):
     print(f"🤖 Agent started for chat {chat_id} (ASYNC INVOKE)...")
     
     try:
-        # USE AINVOKE (Native Async) - This is the key fix!
         final_state = await app.ainvoke(inputs, config)
-        
         messages = final_state.get("messages", [])
         
-        # DEBUG: Print message types to logs so we know what happened
+        # DEBUG LOGS
         for m in messages:
             print(f" - {type(m).__name__}: {len(m.content)} chars")
 
-        # 1. Safety Check: Did the agent actually run?
-        # If the last message is still the Human's input, the Agent failed.
         if not messages or isinstance(messages[-1], HumanMessage):
             print("❌ Agent did not run! Returning error.")
             return "Error: The Agent failed to execute the logic. Please try again."
 
-        # 2. Vacuum Logic: Find the Real Content
-        # Default to the last message
+        # VACUUM LOGIC (Find the longest message)
         final_response = messages[-1].content
         
-        # If the last message is short (e.g., "Done."), look backwards for the HUGE report.
         if len(final_response) < 500:
             print("⚠️ Final response is short. Searching history for the long report...")
             for msg in reversed(messages):
-                # We want a message that is NOT the user input and is LONG
                 if not isinstance(msg, HumanMessage) and len(msg.content) > 500:
                     final_response = msg.content
                     print(f"✅ Found the long report in history ({len(final_response)} chars)")
@@ -174,9 +167,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
 
-    # Check Size Limit (20MB)
     if file_obj.file_size > 20 * 1024 * 1024:
-        await context.bot.send_message(chat_id=chat_id, text="⚠️ File too large (>20MB). Telegram limits bots to 20MB downloads. Please compress it.")
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ File too large (>20MB). Please compress it.")
         return
 
     try:
@@ -197,7 +189,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             input_text = transcript
 
         response_text = await run_agent(chat_id, input_text, context)
-        
         await send_smart_response(context, chat_id, response_text)
         
     except Exception as e:
@@ -207,11 +198,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(file_path)
 
 if __name__ == '__main__':
+    # 1. Run the credential setup FIRST
     setup_google_credentials()
     
+    # 2. Get Bot Name from settings (Defaults to Gestella)
     bot_name = os.getenv("BOT_NAME", "Gestella")
     print(f"🚀 {bot_name} is waking up...")
-
+    
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
