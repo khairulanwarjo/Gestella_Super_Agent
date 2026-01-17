@@ -1,5 +1,4 @@
 import os
-import json
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from langchain_openai import OpenAIEmbeddings
@@ -23,10 +22,9 @@ def get_embedding(text: str):
 # --- 1. SUBSCRIPTION GATEKEEPER ---
 def check_user_subscription(telegram_id: str) -> bool:
     """Checks if the user has an 'active' subscription in Supabase."""
-    if not supabase: return True # Dev mode: Allow if DB missing
+    if not supabase: return True # Dev mode
     try:
         response = supabase.table("users").select("subscription_status").eq("telegram_id", str(telegram_id)).execute()
-        # If user exists and status is active
         if response.data and response.data[0]['subscription_status'] == 'active':
             return True
         return False
@@ -36,23 +34,18 @@ def check_user_subscription(telegram_id: str) -> bool:
 
 # --- 2. MULTI-USER TOKEN MANAGEMENT ---
 def save_user_google_token(telegram_id: str, token_data: dict):
-    """Saves the user's personal Google Token to Supabase."""
     if not supabase: return
     try:
-        # Upsert: Update if exists, Insert if new
         data = {
             "telegram_id": str(telegram_id),
             "google_token": token_data,
-            # We assume they are active if they are logging in, or you manage this manually
             "subscription_status": "active" 
         }
         supabase.table("users").upsert(data).execute()
-        print(f"✅ Saved Google Token for user {telegram_id}")
     except Exception as e:
         print(f"❌ Error saving token: {e}")
 
 def get_user_google_token(telegram_id: str):
-    """Retrieves the user's personal Google Token."""
     if not supabase: return None
     try:
         response = supabase.table("users").select("google_token").eq("telegram_id", str(telegram_id)).execute()
@@ -62,9 +55,12 @@ def get_user_google_token(telegram_id: str):
     except Exception:
         return None
 
-# --- 3. MEMORY FUNCTIONS (Unchanged) ---
+# --- 3. SECURE MEMORY FUNCTIONS ---
 def save_memory(user_id: str, text: str, memory_type: str = "general"):
+    """Saves memory tagged with the specific user_id."""
     if not supabase: return "Error: No DB"
+    print(f"💾 Saving memory for {user_id}...")
+    
     vector = get_embedding(text)
     data = {
         "user_id": str(user_id),
@@ -74,18 +70,29 @@ def save_memory(user_id: str, text: str, memory_type: str = "general"):
     }
     try:
         supabase.table("memories").insert(data).execute()
-        return f"Success: {text[:20]}..."
+        return f"Success: Memory saved."
     except Exception as e:
         return f"Error saving memory: {str(e)}"
 
-def search_memory(query: str, match_threshold: float = 0.1):
+def search_memory(user_id: str, query: str, match_threshold: float = 0.5):
+    """
+    SECURE SEARCH: Finds memories ONLY for the specific user_id.
+    """
     if not supabase: return "Error: No DB"
+    print(f"🔍 Searching memory for {user_id}: {query}")
+    
     query_vector = get_embedding(query)
     try:
         response = supabase.rpc(
             "match_memories",
-            {"query_embedding": query_vector, "match_threshold": match_threshold, "match_count": 5}
+            {
+                "query_embedding": query_vector,
+                "match_threshold": match_threshold,
+                "match_count": 5,
+                "filter_user_id": str(user_id) # <--- PASSING THE ID HERE
+            }
         ).execute()
+        
         results = [item['content'] for item in response.data]
         return "\n".join(results) if results else "No relevant memories found."
     except Exception as e:
