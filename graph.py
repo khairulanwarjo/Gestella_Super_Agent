@@ -66,7 +66,11 @@ async def chatbot_node(state: AgentState):
     - User Location: {user_location}
     
     CRITICAL RULES:
-    1. **MEMORY SECURITY:** You will be provided with a 'User ID' in the message context. You MUST pass this exact ID to the 'save_memory' and 'search_memory' tools. Do not make up an ID.
+    1. **SYSTEM INJECTION:** The user's message will start with "User ID: <ID>". 
+       - You MUST extract this <ID> and use it as the 'user_id' argument for all tools.
+       - **DO NOT** mention the User ID in your final response to the user.
+       - **DO NOT** save the phrase "User ID: ..." inside the memory text. Only save the actual message content.
+       
     2. If the user provides enough info for a calendar event, just DO IT.
     3. Speak English/Singlish.
     4. If the user sends a LONG voice note, use 'analyze_meeting'.
