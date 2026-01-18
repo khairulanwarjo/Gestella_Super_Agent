@@ -160,27 +160,39 @@ async def transcribe_voice(voice_file_path):
         return client.audio.transcriptions.create(model="whisper-1", file=f, language="en").text
 
 async def run_agent(chat_id, user_text, context):
+    """
+    Runs the LangGraph Agent using 'ainvoke' (Native Async).
+    """
     config = {"configurable": {"thread_id": str(chat_id)}}
-    # --- CHANGE THIS LINE ---
-    # We inject the ID so the Agent sees: "User ID: 12345. save my credit card info."
-    secure_input = f"User ID: {chat_id}\n\n{user_text}"
-    inputs = {"messages": [HumanMessage(content=user_text)]}
+    
+    # ✅ THE FIX: Inject the ID here!
+    secure_input = f"User ID: {chat_id}\n\n{user_text}" 
+    inputs = {"messages": [HumanMessage(content=secure_input)]}
+    
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    print(f"🤖 Agent started for chat {chat_id}...")
     
     try:
         final_state = await app.ainvoke(inputs, config)
         messages = final_state.get("messages", [])
-        if not messages or isinstance(messages[-1], HumanMessage): return "Error: Agent failed."
         
+        if not messages or isinstance(messages[-1], HumanMessage):
+            return "Error: Agent failed."
+
         final_response = messages[-1].content
+        
+        # Cleanup: If response is short, check history (Vacuum Logic)
         if len(final_response) < 500:
             for msg in reversed(messages):
                 if not isinstance(msg, HumanMessage) and len(msg.content) > 500:
                     final_response = msg.content
                     break
+        
         return final_response
+
     except Exception as e:
-        return f"Error: {e}"
+        print(f"❌ Critical Agent Error: {e}")
+        return f"Error running agent: {e}"
 
 # --- HANDLERS ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
