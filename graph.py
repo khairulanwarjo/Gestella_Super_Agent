@@ -52,6 +52,7 @@ async def chatbot_node(state: AgentState):
     # --- DYNAMIC CONFIGURATION ---
     user_name = os.getenv("USER_NAME", "Sir")
     bot_name = os.getenv("BOT_NAME", "Gestella")
+    bot_personality = os.getenv("BOT_PERSONALITY","an elite executive assistant.")
     user_location = os.getenv("USER_LOCATION", "Singapore (GMT+8)")
     
     now = datetime.datetime.now()
